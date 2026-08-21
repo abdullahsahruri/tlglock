@@ -1,0 +1,21 @@
+# Table I, Sahruri & Margala, VLSI-SoC 2025.
+# SAT solver performance metrics with LCTL and CRTL locking configurations.
+# "---" in the paper means the 1-hour MiniSAT+ timeout was hit; recorded as
+# empty here. Circuits marked * in the paper (des, b15, b17) used a modified
+# comparator with 10x PMOS/NMOS width -- see the comparator_10x column.
+circuit,suite,n_keys,percent,conflicts,decisions,cpu_time_s,result,lctl_area_um2,lctl_power_uw,lctl_delay_ns,crtl_area_um2,crtl_power_uw,crtl_delay_ns,comparator_10x
+c1355,ISCAS85,16,50,,,,TIMEOUT,380,150,60,280,120,25,0
+c17,ISCAS85,17,50,5,138,0.13,SAT,5,2.5,1.0,3,1.2,0.5,0
+c1908,ISCAS85,17,50,,,,TIMEOUT,300,140,55,220,110,20,0
+c2670,ISCAS85,17,50,0,0,16.7,UNSAT,475,240,90,350,190,35,0
+c7552,ISCAS85,17,50,,,,TIMEOUT,1100,550,210,850,420,80,0
+s1494,ISCAS89,16,20,,,,TIMEOUT,350,170,60,260,130,22,0
+s386,ISCAS89,18,80,104,10797,37.9,SAT,75,35,12,50,25,8,0
+s526,ISCAS89,18,80,109,19055,31.6,SAT,95,47,18,70,35,12,0
+s5378,ISCAS89,16,20,0,0,196.7,UNSAT,820,400,160,600,300,60,0
+s713,ISCAS89,18,70,309,35636,34.1,SAT,105,52,20,75,37,15,0
+i10,MCNC,15,50,,,,TIMEOUT,540,360,400,450,300,150,0
+i8,MCNC,15,80,,,,TIMEOUT,250,160,200,220,140,100,0
+des,MCNC,10,5,,,,TIMEOUT,9000,6000,700,7600,5000,300,1
+b15,ITC99,5,50,,,,TIMEOUT,2300,1500,180,2000,1300,100,1
+b17,ITC99,10,10,,,,TIMEOUT,7200,5000,550,6100,4000,250,1

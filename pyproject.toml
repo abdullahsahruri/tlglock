@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tlglock"
+version = "0.2.0"
+description = "Key-driven logic locking in threshold logic gates"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-cov"]
+plot = ["matplotlib", "numpy"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+  "golden: regression against Table I of the VLSI-SoC'25 paper (needs ABC + MiniSAT+)",
+  "slow: long-running",
+]
