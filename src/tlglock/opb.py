@@ -135,25 +135,37 @@ class OpbEncoder:
         )
 
     def encode_network(
-        self, net: ThNetwork, suffix: str = "", share: Iterable[str] = ()
+        self,
+        net: ThNetwork,
+        suffix: str = "",
+        share: Iterable[str] = (),
+        rename: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """
-        Encode every gate of `net`, optionally renaming signals with `suffix`.
+        Encode every gate of `net`, renaming signals for this copy.
 
-        Signals listed in `share` keep their original names, so two copies of
-        a circuit can share primary data inputs while having independent key
-        variables -- the standard miter construction.
+        By default signals get `suffix` appended and anything in `share` keeps
+        its original name, which is the miter construction: two copies reading
+        the same primary inputs through independent keys.
+
+        An explicit `rename` overrides both for the signals it names. The SAT
+        attack needs that: each recorded distinguishing input adds a circuit
+        copy whose internal signals are private but whose key variables must
+        be the *same* variables as in the main miter, or the accumulated
+        constraints would not actually constrain the key being solved for.
         """
         shared = set(share)
-        rename = {}
+        mapping: dict[str, str] = {}
         if suffix:
             for s in net.signals:
                 if s not in shared:
-                    rename[s] = f"{s}{suffix}"
+                    mapping[s] = f"{s}{suffix}"
+        if rename:
+            mapping.update(rename)
 
         for gate in net.topological_order():
-            self.encode_gate(gate, rename=rename)
-        return rename
+            self.encode_gate(gate, rename=mapping)
+        return mapping
 
     # -- XOR / difference ---------------------------------------------------
 
@@ -230,28 +242,9 @@ def build_distinguishing_miter(
     return enc
 
 
-def add_oracle_constraint(
-    enc: OpbEncoder,
-    locked: ThNetwork,
-    pattern: dict[str, int],
-    response: Sequence[int],
-    tag: str,
-) -> None:
-    """
-    Add a solved-oracle clause: any surviving key must reproduce `response`
-    on `pattern`. Called once per DIP in the attack loop.
-    """
-    keys_free = [n for n in locked.inputs if n not in pattern]
-    rename = enc.encode_network(locked, suffix=f"_{tag}", share=[])
-
-    for n, v in pattern.items():
-        enc.fix(rename.get(n, n), v)
-    for o, r in zip(locked.outputs, response):
-        enc.fix(rename.get(o, o), r)
-
-    # Tie this copy's key variables to the shared key variables.
-    for k in keys_free:
-        shared = enc.var(k)
-        local = enc.var(rename.get(k, k))
-        enc.add([(1, shared), (-1, local)], 0, f"{k} link >=")
-        enc.add([(-1, shared), (1, local)], 0, f"{k} link <=")
+# add_oracle_constraint() lived here. It linked each oracle copy's key
+# variables to a set of "shared" key variables that the miter never actually
+# used -- the miter names its keys k_A and k_B, so the constraints it added
+# constrained nothing. The correct construction needs one oracle copy per key
+# set per recorded input, which is more context than a single function should
+# own; it now lives in attack.py as _encode_oracle_copy().
