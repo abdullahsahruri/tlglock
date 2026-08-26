@@ -32,7 +32,7 @@ Eleven modules under `src/tlglock/`, 471 tests passing, one skipped.
 pip install -e ".[dev]"
 pytest -q                    # ~10 s
 pytest -m slow               # exhaustive 4-variable enumeration
-python -m tlglock run bench/circuits/c17.bench --percent 50 --keys 2
+python -m tlglock run bench/c17.bench --percent 50 --keys 2
 ```
 
 ## Four findings that are not in the paper
