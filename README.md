@@ -119,6 +119,28 @@ from tlglock import ExternalSolver, sat_attack
 sat_attack(locked, keys, oracle, solver=ExternalSolver(binary="minisat+"))
 ```
 
+## Cell characterisation
+
+Area, power and delay come from ngspice driven against ASU PTM model cards --
+no commercial simulator, no PDK install.
+
+```bash
+apt install ngspice
+curl -O https://ptm.asu.edu/modelcard/45nm_HP.pm
+python -m tlglock characterize --models 45nm_HP.pm -o chars.csv
+```
+
+```python
+from tlglock import CellSpec, key_size_sweep, table_i_rows
+
+results = key_size_sweep(key_sizes=range(2, 17, 2))
+for row in table_i_rows(results):
+    print(row)
+```
+
+The LCTL and CRTL netlists in `spice.py` are reconstructed from Fig. 2 of the
+paper and should be checked against it before use -- see `CLAUDE.md`.
+
 ## Layout
 
 ```
@@ -133,10 +155,12 @@ src/tlglock/
   metrics.py    corruption rate, equivalence, key-space collapse
   opb.py        pseudo-Boolean encoding and miter construction
   attack.py     oracle-guided SAT attack
+  spice.py      LCTL/CRTL netlist generation, area model
+  characterize.py  ngspice runner, measurement parsing, sweep
   cli.py        command-line driver
 tests/
   golden/table1.csv    Table I regression data
 ```
 
-Not implemented: Cadence cell characterisation for the area, power and delay
-columns. See `CLAUDE.md`.
+Outstanding: verify the reconstructed LCTL/CRTL topologies against Fig. 2 of
+the paper. See `CLAUDE.md`.

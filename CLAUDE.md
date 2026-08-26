@@ -11,7 +11,7 @@ doing anything else.
 
 ## State
 
-Eleven modules under `src/tlglock/`, 471 tests passing, one skipped.
+Thirteen modules under `src/tlglock/`, 527 tests passing, one skipped.
 
 | Module | Purpose | Status |
 |---|---|---|
@@ -25,8 +25,9 @@ Eleven modules under `src/tlglock/`, 471 tests passing, one skipped.
 | `metrics.py` | corruption rate, equivalence, key-space collapse | complete |
 | `opb.py` | pseudo-Boolean encoding, distinguishing miter | complete |
 | `attack.py` | oracle-guided SAT attack loop | complete |
+| `spice.py` | LCTL/CRTL netlist generation, area model | complete |
+| `characterize.py` | ngspice runner, measurement parsing, sweep | complete |
 | `cli.py` | command-line driver | complete |
-| Cadence characterisation | LCTL/CRTL in GPDK045 | **missing** |
 
 ```bash
 pip install -e ".[dev]"
@@ -103,10 +104,47 @@ This matters for reproduction, so the CLI does not guess: `run` reports
 meaning before comparing counts against Table I, and define the column
 explicitly in the journal version.
 
+## Characterisation without Cadence
+
+Cell-level area, power and delay now come from **ngspice + ASU PTM model
+cards** rather than Spectre + GPDK045. PTM cards are plain BSIM4 text files
+from https://ptm.asu.edu/ -- no PDK install, nothing tied to a commercial
+tool, and staying at 45nm keeps the numbers roughly comparable to Table I.
+
+```bash
+apt install ngspice                      # or brew install ngspice
+curl -O https://ptm.asu.edu/modelcard/45nm_HP.pm
+python -m tlglock characterize --models 45nm_HP.pm -o chars.csv
+```
+
+Standard-cell characterisers (CharLib, lctime) were considered and rejected.
+They are good tools, but they target static CMOS cells and emit NLDM `.lib`
+models. CRTL is dynamic -- precharge/evaluate, clocked, with an analog
+comparator -- so cell recognition does not apply and the NLDM template does
+not describe it. What Table I needs is three numbers per configuration, not a
+Liberty library, and a direct ngspice harness is the smaller and more honest
+way to get them.
+
+**The LCTL and CRTL netlists in `spice.py` are reconstructions.** The original
+schematics are gone, so the topologies were rebuilt from the device labels in
+Fig. 2 plus the cited sources [15] and [16]. The harness around them --
+sweeping, stimulus generation, measurement, parsing, reporting -- is
+topology-independent and fully tested. **Check the netlists against Fig. 2
+before publishing any number from them**; correcting them means editing
+`lctl_subckt()` and `crtl_subckt()` and nothing else.
+
+Two further notes on the method. Area is analytical -- the sum of W x L
+scaled by explicit diffusion and routing factors -- which is what most TLG
+papers report; if a reviewer wants measured area, lay one cell out in Magic or
+KLayout, fit the two factors against it, and the whole sweep rescales. And
+delay is measured at the decision boundary, where the weighted sum clears the
+threshold by exactly one unit, because a threshold gate resolves much faster
+when the margin is wide and a mid-range measurement would flatter the cell.
+
 ## Remaining work
 
-**Cadence characterisation.** LCTL/CRTL in GPDK045 for the area, power and
-delay columns. Not scriptable from here.
+**Verify the cell topologies** against Fig. 2, as above. This is the one thing
+blocking real area/power/delay numbers.
 
 **Real benchmarks.** `bench/fetch.sh` points at the sources; only a
 hand-written c17 is checked in. Getting ISCAS/ITC/MCNC circuits in is what

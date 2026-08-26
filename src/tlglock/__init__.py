@@ -9,6 +9,9 @@ The flow, following Fig. 3 of the paper:
 
     read_circuit  ->  map_to_tlg  ->  collapse  ->  lock  ->  sat_attack
       (step 1)        (steps 2-3)     (step 4)    (steps 5-7)  (evaluation)
+
+Cell-level area, power and delay come from `characterize`, which drives
+ngspice against ASU PTM model cards -- no commercial simulator or PDK.
 """
 
 from .thfile import ThGate, ThNetwork, ThParseError, parse_th, read_th, write_th
@@ -35,8 +38,17 @@ from .attack import (
     AttackResult, ExternalSolver, PbSolver, Status,
     oracle_from, sat_attack, verify_recovered_key,
 )
+from .spice import (
+    CellSpec, Technology, TECHNOLOGIES, PTM45_HP, PTM45_LP, PTM130,
+    area_um2, build_deck, subckt, worst_case_stimulus,
+)
+from .characterize import (
+    CellResult, MeasurementError, SimulatorError,
+    characterize, key_size_sweep, ngspice_available,
+    parse_measurements, table_i_rows, write_csv,
+)
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     # netlist
@@ -63,4 +75,10 @@ __all__ = [
     # attack
     "AttackResult", "ExternalSolver", "PbSolver", "Status",
     "oracle_from", "sat_attack", "verify_recovered_key",
+    # characterization
+    "CellSpec", "Technology", "TECHNOLOGIES", "PTM45_HP", "PTM45_LP", "PTM130",
+    "area_um2", "build_deck", "subckt", "worst_case_stimulus",
+    "CellResult", "MeasurementError", "SimulatorError",
+    "characterize", "key_size_sweep", "ngspice_available",
+    "parse_measurements", "table_i_rows", "write_csv",
 ]

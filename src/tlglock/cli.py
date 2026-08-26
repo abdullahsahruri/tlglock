@@ -27,8 +27,12 @@ from .attack import (
     sat_attack,
     verify_recovered_key,
 )
+from .characterize import (
+    key_size_sweep, ngspice_available, table_i_rows, write_csv,
+)
 from .collapse import collapse
 from .locking import lock
+from .spice import TECHNOLOGIES
 from .metrics import corruption_rate
 from .thfile import read_th, write_th
 
@@ -175,6 +179,44 @@ def cmd_run(args) -> int:
     return 0
 
 
+def cmd_characterize(args) -> int:
+    if not ngspice_available(args.binary):
+        print(
+            f"'{args.binary}' not found on PATH.\n"
+            "  Install:  apt install ngspice   (or brew install ngspice)\n"
+            "  Models:   https://ptm.asu.edu/  -> 45nm_HP.pm\n"
+            "  Then:     --models path/to/45nm_HP.pm",
+            file=sys.stderr,
+        )
+        return 2
+
+    tech = TECHNOLOGIES[args.tech]
+    if args.models:
+        from dataclasses import replace
+
+        tech = replace(tech, model_include=args.models)
+
+    results = key_size_sweep(
+        cells=tuple(args.cells),
+        key_sizes=range(args.min_keys, args.max_keys + 1, args.step),
+        tech=tech,
+        comparator_scale=args.comparator_scale,
+        binary=args.binary,
+    )
+    if args.output:
+        write_csv(results, args.output)
+        print(f"wrote {len(results)} rows to {args.output}", file=sys.stderr)
+
+    rows = table_i_rows(results)
+    if not rows:
+        print("no LCTL/CRTL pairs to compare", file=sys.stderr)
+        return 1
+    print(",".join(rows[0]))
+    for r in rows:
+        print(",".join(str(v) for v in r.values()))
+    return 0
+
+
 def _emit(net, output: str | None) -> None:
     if output:
         write_th(net, output)
@@ -231,6 +273,20 @@ def build_parser() -> argparse.ArgumentParser:
     add_synth_opts(s)
     add_lock_opts(s)
     s.set_defaults(func=cmd_run)
+
+    s = sub.add_parser(
+        "characterize", help="ngspice sweep for the area/power/delay columns"
+    )
+    s.add_argument("--tech", choices=sorted(TECHNOLOGIES), default="PTM45")
+    s.add_argument("--models", help="path to the PTM model card")
+    s.add_argument("--binary", default="ngspice")
+    s.add_argument("--cells", nargs="+", default=["LCTL", "CRTL"])
+    s.add_argument("--min-keys", type=int, default=2)
+    s.add_argument("--max-keys", type=int, default=16)
+    s.add_argument("--step", type=int, default=2)
+    s.add_argument("--comparator-scale", type=float, default=1.0)
+    s.add_argument("--output", "-o", help="CSV of the raw per-cell results")
+    s.set_defaults(func=cmd_characterize)
 
     return p
 
