@@ -135,11 +135,17 @@ def run_one(name: str, path: str, args) -> dict:
         epsilon=args.epsilon, settle_rounds=args.settle_rounds,
         seed=args.seed,
     )
+    # A timed-out AppSAT run never found a key, so AppSatResult's error fields
+    # are still at their 1.0 default -- that is "not measured", not "100%
+    # wrong". Emitting the default would put an unmeasured number in a results
+    # column where every other row is measured, which is precisely the kind of
+    # thing that later gets quoted as data. Leave it blank instead.
+    measured = ares.key is not None
     row.update(
         app_status=ares.status.value, app_exact=ares.exact,
         app_settled=ares.settled,
-        app_err_patterns=f"{ares.error_patterns:.4f}",
-        app_err_bits=f"{ares.error_bits:.4f}",
+        app_err_patterns=f"{ares.error_patterns:.4f}" if measured else "",
+        app_err_bits=f"{ares.error_bits:.4f}" if measured else "",
         app_iters=ares.iterations, app_rounds=ares.rounds,
         app_s=f"{ares.seconds:.2f}",
     )
