@@ -33,6 +33,7 @@ competition output convention, which is what Table I's numbers require.
 
 from __future__ import annotations
 
+import random
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -518,3 +519,273 @@ def verify_recovered_key(
         if outputs_of(original, assign) != outputs_of(locked, {**assign, **key}):
             return False
     return True
+
+
+# -- AppSAT -----------------------------------------------------------------
+
+
+@dataclass
+class AppSatResult:
+    """
+    Outcome of an AppSAT run.
+
+    `status` records how the loop ended, in the same vocabulary sat_attack()
+    uses -- stated explicitly here because Table I's own Result column is
+    ambiguous about exactly this (see CLAUDE.md finding 4):
+
+        UNSAT    the miter went UNSAT, so the loop ran to exact completion
+                 and `key` is functionally equivalent to the real key
+        SAT      the loop stopped early on the approximate criterion and
+                 `key` is an approximate key
+        TIMEOUT  the wall-clock budget expired first
+
+    Prefer the `exact` / `settled` flags over `status` when branching; they
+    say the same thing without the solver-verdict overloading.
+
+    Two error figures are reported, because "output error" has two natural
+    definitions and they are not the same number:
+
+        error_patterns  fraction of sampled input patterns on which `key`
+                        gets *any* primary output wrong
+        error_bits      fraction of primary-output *bits* wrong, averaged
+                        over sampled patterns -- what corruption_rate()
+                        measures
+
+    error_bits <= error_patterns always, with equality only on a single-output
+    circuit or when every wrong pattern corrupts every output. AppSAT's
+    epsilon bounds error_patterns. Reporting one and comparing it against the
+    other compares different quantities, so both are recorded and the caller
+    can say which it means.
+    """
+
+    status: Status
+    key: dict[str, int] | None = None
+    exact: bool = False
+    settled: bool = False
+    error_patterns: float = 1.0
+    error_bits: float = 1.0
+    iterations: int = 0
+    rounds: int = 0
+    queries: int = 0
+    dips: list[dict[str, int]] = field(default_factory=list)
+    conflicts: int = 0
+    decisions: int = 0
+    seconds: float = 0.0
+
+
+def estimate_key_error(
+    locked: ThNetwork,
+    key: dict[str, int],
+    oracle: Callable[[dict[str, int]], tuple[int, ...]],
+    data_inputs: Sequence[str],
+    samples: int,
+    rng: random.Random,
+) -> tuple[float, float, list[tuple[dict[str, int], tuple[int, ...]]]]:
+    """
+    Estimate the output error of `key` from random oracle queries.
+
+    Returns (error_patterns, error_bits, counterexamples). The
+    counterexamples are the (pattern, oracle response) pairs that disagreed --
+    exactly the observations that refute `key` when fed back into the
+    constraint set.
+
+    A sample of size n cannot resolve an error rate below 1/n, so an epsilon
+    below that is not measurable: use samples >= 1/epsilon if the bound is
+    meant to be meaningful rather than decorative.
+    """
+    n_out = len(locked.outputs)
+    if samples <= 0 or n_out == 0:
+        return 0.0, 0.0, []
+
+    bad_patterns = 0
+    bad_bits = 0
+    counterexamples: list[tuple[dict[str, int], tuple[int, ...]]] = []
+
+    for _ in range(samples):
+        x = {n: rng.randint(0, 1) for n in data_inputs}
+        ref = oracle(x)
+        got = outputs_of(locked, {**x, **key})
+        diff = sum(1 for a, b in zip(ref, got) if a != b)
+        if diff:
+            bad_patterns += 1
+            bad_bits += diff
+            counterexamples.append((x, ref))
+
+    return bad_patterns / samples, bad_bits / (samples * n_out), counterexamples
+
+
+def _solve_for_key(
+    locked: ThNetwork,
+    key_names: Sequence[str],
+    history: Sequence[tuple[dict[str, int], tuple[int, ...]]],
+    solver: "Solver",
+    timeout: float,
+) -> tuple[dict[str, int] | None, SolveResult]:
+    """A key consistent with every recorded observation, or None."""
+    enc = build_key_formula(locked, key_names, history)
+    res = solver.solve(enc, timeout=timeout)
+    if res.status is not Status.SAT:
+        return None, res
+    return {k: res.model.get(enc.var(f"{k}_A"), 0) for k in key_names}, res
+
+
+def appsat_attack(
+    locked: ThNetwork,
+    key_names: Sequence[str],
+    oracle: Callable[[dict[str, int]], tuple[int, ...]],
+    solver: Solver | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+    round_size: int = 12,
+    samples: int = 64,
+    epsilon: float = 0.01,
+    settle_rounds: int = 3,
+    learn_from_queries: bool = True,
+    max_iterations: int = 10_000,
+    seed: int = 0,
+    on_round: Callable[[int, float, float], None] | None = None,
+) -> AppSatResult:
+    """
+    AppSAT: the oracle-guided attack with an approximate stopping rule.
+
+    Shamsi et al., "AppSAT: Approximately Deobfuscating Integrated Circuits,"
+    IEEE HOST 2017.
+
+    AppSAT is *not* an approximate solver. The inner solve is the same exact
+    call sat_attack() makes, on the same miter; what AppSAT relaxes is
+    termination. Every `round_size` DIP iterations it extracts a candidate key
+    consistent with everything observed so far, estimates that key's output
+    error from `samples` random oracle queries, and stops once the estimate
+    stays at or below `epsilon` for `settle_rounds` consecutive rounds.
+
+    That distinction is the whole point when arguing resistance. A lock whose
+    security rests on the DIP loop being long does not survive AppSAT, because
+    AppSAT never has to finish the loop -- only to reach a key that is right
+    often enough. A lock survives only if no low-error key exists at all,
+    which is a claim about the corruption landscape rather than about solver
+    tractability, and is measurable independently of how hard the solve is.
+
+    Parameters worth setting deliberately:
+
+      epsilon        error bound for stopping, on error_patterns. A negative
+                     value disables early stopping entirely, which makes this
+                     exactly sat_attack() with error reporting attached.
+      samples        random queries per round. Cannot resolve an error rate
+                     below 1/samples -- see estimate_key_error().
+      settle_rounds  consecutive rounds required below epsilon, so one lucky
+                     sample does not end the attack.
+
+    `learn_from_queries` feeds the *disagreeing* random queries back into the
+    constraint set. AppSAT as published adds every random query; adding only
+    the counterexamples keeps the formula smaller and guarantees progress --
+    the candidate just refuted cannot come back -- which matters here because
+    the built-in PbSolver has no clause learning. Set it False to measure
+    error without letting the queries prune the key space.
+    """
+    solver = solver or PbSolver()
+    rng = random.Random(seed)
+    keys = set(key_names)
+    data_inputs = [n for n in locked.inputs if n not in keys]
+
+    history: list[tuple[dict[str, int], tuple[int, ...]]] = []
+    result = AppSatResult(status=Status.UNKNOWN)
+    start = time.monotonic()
+    streak = 0
+
+    def elapsed() -> float:
+        return time.monotonic() - start
+
+    def timed_out() -> AppSatResult:
+        result.status = Status.TIMEOUT
+        result.seconds = elapsed()
+        return result
+
+    for it in range(max_iterations):
+        remaining = timeout - elapsed()
+        if remaining <= 0:
+            return timed_out()
+
+        enc = build_attack_formula(locked, key_names, history)
+        res = solver.solve(enc, timeout=remaining)
+        result.conflicts += res.conflicts
+        result.decisions += res.decisions
+
+        if res.status is Status.TIMEOUT:
+            return timed_out()
+        if res.status is Status.UNSAT:
+            break
+
+        dip = {n: res.model.get(enc.var(n), 0) for n in data_inputs}
+        history.append((dip, oracle(dip)))
+        result.dips.append(dip)
+        result.iterations = it + 1
+
+        if (it + 1) % round_size:
+            continue
+
+        # -- round boundary: is the best key so far already good enough? ----
+        remaining = timeout - elapsed()
+        if remaining <= 0:
+            return timed_out()
+
+        cand, kres = _solve_for_key(
+            locked, key_names, history, solver, max(remaining, 1.0)
+        )
+        result.conflicts += kres.conflicts
+        result.decisions += kres.decisions
+        if cand is None:
+            continue
+
+        result.rounds += 1
+        ep, eb, counter = estimate_key_error(
+            locked, cand, oracle, data_inputs, samples, rng
+        )
+        result.queries += samples
+        if on_round:
+            on_round(result.rounds, ep, eb)
+        if learn_from_queries and counter:
+            history.extend(counter)
+
+        if ep <= epsilon:
+            streak += 1
+            if streak >= settle_rounds:
+                result.status = Status.SAT
+                result.key = cand
+                result.settled = True
+                result.error_patterns = ep
+                result.error_bits = eb
+                result.seconds = elapsed()
+                return result
+        else:
+            streak = 0
+    else:
+        result.status = Status.UNKNOWN
+        result.seconds = elapsed()
+        return result
+
+    # -- the miter went UNSAT, so the loop completed exactly ----------------
+    remaining = timeout - elapsed()
+    cand, kres = _solve_for_key(
+        locked, key_names, history, solver, max(remaining, 1.0)
+    )
+    result.conflicts += kres.conflicts
+    result.decisions += kres.decisions
+
+    if cand is None:
+        if history:
+            result.status = kres.status
+            result.seconds = elapsed()
+            return result
+        # Nothing ever constrained the key, so no value of it can matter.
+        cand = {k: 0 for k in key_names}
+
+    ep, eb, _ = estimate_key_error(
+        locked, cand, oracle, data_inputs, samples, rng
+    )
+    result.queries += samples
+    result.status = Status.UNSAT
+    result.key = cand
+    result.exact = True
+    result.error_patterns = ep
+    result.error_bits = eb
+    result.seconds = elapsed()
+    return result

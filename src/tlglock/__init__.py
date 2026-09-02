@@ -24,6 +24,10 @@ from .metrics import (
     corruption_rate, is_equivalent_under_correct_key,
     equivalent_key_count, output_hamming_profile, key_weight_sweep,
 )
+from .encoding import (
+    GateEncoding, KeyEquations, NetworkEncoding,
+    format_report, gate_encoding, key_equations, network_encoding,
+)
 from .opb import OpbEncoder, build_distinguishing_miter
 from .lp import Constraint, solve_feasibility
 from .separable import (
@@ -35,7 +39,8 @@ from .abc import (
 )
 from .collapse import CollapseStats, collapse, compose, equivalent
 from .attack import (
-    AttackResult, ExternalSolver, PbSolver, Status,
+    AppSatResult, AttackResult, ExternalSolver, PbSolver, Status,
+    appsat_attack, estimate_key_error,
     oracle_from, sat_attack, verify_recovered_key,
 )
 from .spice import (
@@ -61,6 +66,9 @@ __all__ = [
     # metrics
     "corruption_rate", "is_equivalent_under_correct_key",
     "equivalent_key_count", "output_hamming_profile", "key_weight_sweep",
+    # encoding size
+    "GateEncoding", "KeyEquations", "NetworkEncoding",
+    "format_report", "gate_encoding", "key_equations", "network_encoding",
     # encoding
     "OpbEncoder", "build_distinguishing_miter",
     "Constraint", "solve_feasibility",
@@ -73,7 +81,8 @@ __all__ = [
     # collapse
     "CollapseStats", "collapse", "compose", "equivalent",
     # attack
-    "AttackResult", "ExternalSolver", "PbSolver", "Status",
+    "AppSatResult", "AttackResult", "ExternalSolver", "PbSolver", "Status",
+    "appsat_attack", "estimate_key_error",
     "oracle_from", "sat_attack", "verify_recovered_key",
     # characterization
     "CellSpec", "Technology", "TECHNOLOGIES", "PTM45_HP", "PTM45_LP", "PTM130",

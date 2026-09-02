@@ -31,6 +31,7 @@ from .characterize import (
     key_size_sweep, ngspice_available, table_i_rows, write_csv,
 )
 from .collapse import collapse
+from .encoding import format_report
 from .locking import lock
 from .spice import TECHNOLOGIES
 from .metrics import corruption_rate
@@ -179,6 +180,16 @@ def cmd_run(args) -> int:
     return 0
 
 
+def cmd_encoding(args) -> int:
+    net = read_th(args.input)
+    keys = list(args.keys or [])
+    if args.original:
+        original = read_th(args.original)
+        keys = [n for n in net.inputs if n not in original.inputs]
+    print(format_report(net, key_names=keys, max_fanin=args.max_fanin))
+    return 0
+
+
 def cmd_characterize(args) -> int:
     if not ngspice_available(args.binary):
         print(
@@ -273,6 +284,17 @@ def build_parser() -> argparse.ArgumentParser:
     add_synth_opts(s)
     add_lock_opts(s)
     s.set_defaults(func=cmd_run)
+
+    s = sub.add_parser(
+        "encoding", help="how many equations the locking creates, per encoding"
+    )
+    s.add_argument("input")
+    s.add_argument("--original", help="unlocked netlist, to identify key inputs")
+    s.add_argument(
+        "--keys", nargs="+", help="key input names, if --original is not given"
+    )
+    s.add_argument("--max-fanin", type=int, default=16)
+    s.set_defaults(func=cmd_encoding)
 
     s = sub.add_parser(
         "characterize", help="ngspice sweep for the area/power/delay columns"
