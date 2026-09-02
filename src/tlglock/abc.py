@@ -624,23 +624,16 @@ def map_to_tlg(
         needed.add(nid)
         stack.extend(chosen[nid][0])
 
-    const_used = False
     for nid in aig.topo_ids():
         if nid not in needed:
             continue
         cut, real = chosen[nid]
         support = sorted(cut)
-        if 0 in support:
-            const_used = True
         net.gates.append(
             real.to_gate([name_of[s] for s in support], name_of[nid])
         )
         stats.max_weight = max(stats.max_weight, real.max_weight)
         stats.max_fanin = max(stats.max_fanin, len(support))
-
-    if const_used:
-        # A gate with no inputs and threshold 1 is constant zero.
-        net.gates.insert(0, ThGate(inputs=[], output="__const0", weights=[], threshold=1))
 
     # Primary outputs. .th has no output-polarity field, so an inverted PO
     # literal needs a real inverting gate; name it for the output directly
@@ -672,6 +665,18 @@ def map_to_tlg(
             )
             driven.add(name)
         net.outputs.append(name)
+
+    # The constant driver has to be decided *after* the primary-output loop,
+    # not before it. A PO driven straight off the constant node -- which
+    # happens in real benchmarks, c2670 and s5378 among them -- emits a gate
+    # referencing __const0 here, long after any decision made while walking
+    # the internal cuts. Checking actual references instead of predicting them
+    # keeps the two in step.
+    if any("__const0" in g.inputs for g in net.gates):
+        # No inputs and threshold 1: the empty sum is 0, which never reaches 1.
+        net.gates.insert(
+            0, ThGate(inputs=[], output="__const0", weights=[], threshold=1)
+        )
 
     net.validate()
     stats.gates = len(net.gates)

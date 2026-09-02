@@ -354,3 +354,34 @@ def test_stats_are_consistent():
     assert stats.cuts_separable <= stats.cuts_tried
     assert 0.0 <= stats.separable_fraction <= 1.0
     assert stats.max_fanin <= 6
+
+
+# -- constant-driven primary outputs ---------------------------------------
+
+def test_constant_driven_output_gets_its_driver():
+    """
+    A primary output tied straight to a constant must still produce a valid
+    network. The constant driver used to be decided while walking the internal
+    cuts, before the primary-output loop ran, so an output driven directly off
+    the constant node referenced '__const0' with nothing driving it and
+    validate() rejected the result. Hit by c2670 and s5378.
+    """
+    src = "INPUT(a)\nINPUT(b)\nOUTPUT(z)\nOUTPUT(w)\nz = AND(a, b)\nw = AND(a, NOT_a)\nNOT_a = NOT(a)\n"
+    net, _ = map_to_tlg(read_bench(src))
+    net.validate()
+    for pv, qv in product((0, 1), repeat=2):
+        assert outputs_of(net, {"a": pv, "b": qv}) == (pv & qv, 0)
+
+
+def test_constant_true_output_is_inverted_correctly():
+    src = "INPUT(a)\nOUTPUT(z)\nz = OR(a, NOT_a)\nNOT_a = NOT(a)\n"
+    net, _ = map_to_tlg(read_bench(src))
+    net.validate()
+    for v in (0, 1):
+        assert outputs_of(net, {"a": v}) == (1,)
+
+
+def test_no_constant_gate_when_unused():
+    """The const driver must not appear in networks that never reference it."""
+    net, _ = map_to_tlg(read_bench(C17))
+    assert "__const0" not in {g.output for g in net.gates}
