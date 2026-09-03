@@ -126,24 +126,72 @@ def test_crtl_includes_the_charge_recycling_switch():
     assert re.search(r"^M7 ", text, re.MULTILINE)
 
 
-def test_weights_map_to_device_widths():
-    """A weight of w must produce a device w times the unit width."""
+@pytest.mark.parametrize("cell", ["LCTL", "DCSTL"])
+def test_conductance_weights_map_to_device_widths(cell):
+    """In a conductance cell, weight w is a device w times the unit width."""
+    s = CellSpec(cell=cell, weights=[1, 4], key_weights=[], threshold=2)
+    pre = "M4" if cell == "LCTL" else "Md"
+    # Each weight is now emitted as that many parallel unit devices, so the
+    # weight shows up as a device *count* rather than a single width.
+    counts = {}
+    for n, w, _ in transistors(s):
+        for i in (1, 2):
+            if n.startswith(f"{pre}{i}_"):
+                counts[i] = counts.get(i, 0) + w
+    assert counts[2] == pytest.approx(4 * counts[1])
+
+
+def test_capacitive_weights_map_to_capacitor_values():
+    """
+    CRTL weights are capacitor ratios, not widths -- phi is a capacitive
+    divider onto the floating gate. This is the difference that makes signed
+    weights expensive; see test_negative_weight_costs_an_inverter_in_crtl.
+    """
     s = CellSpec(cell="CRTL", weights=[1, 4], key_weights=[], threshold=2)
-    devices = {n: w for n, w, _ in transistors(s)}
-    assert devices["Mx2"] == pytest.approx(4 * devices["Mx1"])
+    values = {
+        l.split()[0]: float(l.split()[3])
+        for l in subckt(s).splitlines() if l.startswith("C")
+    }
+    assert values["C2"] == pytest.approx(4 * values["C1"])
 
 
-def test_negative_weights_go_to_the_reference_branch():
+@pytest.mark.parametrize("cell", ["LCTL", "DCSTL"])
+def test_negative_weights_go_to_the_threshold_bank(cell):
     """
-    A negative weight subtracts from the sum, which is equivalent to adding
-    to the threshold the sum must clear -- so it is realised on the reference
-    side rather than as a device that cannot exist.
+    A negative weight subtracts from the sum, which is the same as adding to
+    the threshold the sum must clear. A two-bank conductance cell realises
+    that by moving the device to the other bank -- free, and leaving nothing
+    that distinguishes the input.
     """
-    s = CellSpec(cell="CRTL", weights=[2], key_weights=[-2], threshold=1)
-    lines = [l for l in subckt(s).splitlines() if l.startswith("Mx")]
-    by_node = {l.split()[0]: l.split()[1] for l in lines}
-    assert by_node["Mx1"] == "nsum"
-    assert by_node["Mx2"] == "nref"
+    s = CellSpec(cell=cell, weights=[2], key_weights=[-2], threshold=1)
+    pre = "M4" if cell == "LCTL" else "Md"
+    by_node = {
+        l.split()[0]: l.split()[1]
+        for l in subckt(s).splitlines() if l.startswith(pre)
+    }
+    assert all(v == "da" for k, v in by_node.items() if k.startswith(f"{pre}1_"))
+    assert all(v == "db" for k, v in by_node.items() if k.startswith(f"{pre}2_"))
+
+
+def test_negative_weight_costs_an_inverter_in_crtl():
+    """
+    Capacitors cannot be negative, so a negative weight has to drive the
+    complement of its input -- costing an inverter a positive weight does not
+    need.
+
+    That asymmetry is the finding. TLGLock claims a key input is
+    indistinguishable from a data input, but `balanced` mode makes about half
+    the key weights negative, and each one leaves an inverter behind. In the
+    cell the scheme is named after, the lock acquires exactly the structural
+    footprint the scheme says it does not have.
+    """
+    positive = CellSpec(cell="CRTL", weights=[2], key_weights=[2], threshold=1)
+    negative = CellSpec(cell="CRTL", weights=[2], key_weights=[-2], threshold=1)
+
+    assert device_count(negative) == device_count(positive) + 2
+    text = subckt(negative)
+    assert "K1_n" in text
+    assert "inverter(s) added for negative weights" in text
 
 
 def test_comparator_scale_widens_devices():
@@ -153,21 +201,39 @@ def test_comparator_scale_widens_devices():
     assert wide > base
 
 
-@pytest.mark.parametrize("cell", ["LCTL", "CRTL"])
-def test_device_count_grows_with_key_count(cell):
+@pytest.mark.parametrize("cell", ["LCTL", "DCSTL"])
+def test_conductance_device_count_grows_with_key_count(cell):
     counts = [
         device_count(
-            CellSpec(
-                cell=cell,
-                weights=[3, 2, 1, 1],
-                key_weights=[2] * k,
-                threshold=3,
-            )
+            CellSpec(cell=cell, weights=[3, 2, 1, 1],
+                     key_weights=[2] * k, threshold=3)
         )
         for k in (0, 2, 4, 8)
     ]
     assert counts == sorted(counts)
     assert counts[-1] > counts[0]
+
+
+def test_crtl_transistor_count_is_independent_of_fanin():
+    """
+    The architectural consequence of capacitive weighting: a positively
+    weighted input adds a capacitor, not a transistor. The comparator stays a
+    single differential pair however wide the gate gets, which is why CRTL
+    reaches high fan-in -- and why its area has to be counted in capacitors as
+    well as devices, or it will look free.
+    """
+    def cell(k):
+        return CellSpec(cell="CRTL", weights=[3, 2, 1, 1],
+                        key_weights=[2] * k, threshold=3)
+
+    counts = [device_count(cell(k)) for k in (0, 2, 4, 8)]
+    assert len(set(counts)) == 1, counts
+
+    caps = [
+        len([l for l in subckt(cell(k)).splitlines() if l.startswith("C")])
+        for k in (0, 2, 4, 8)
+    ]
+    assert caps == sorted(caps) and caps[-1] > caps[0]
 
 
 # -- area -------------------------------------------------------------------
@@ -179,9 +245,17 @@ def test_area_is_positive_and_scales():
 
 
 def test_area_overhead_factors_are_multiplicative():
-    s = spec()
+    """
+    The two overhead factors scale the transistor area. Capacitor area is
+    additive on top and is not affected by diffusion or routing overhead, so
+    a capacitive cell is checked against the transistor part alone.
+    """
+    from tlglock.spice import capacitor_area_um2
+
+    s = CellSpec(cell="LCTL", weights=[3, 2, 1, 1], threshold=4)
     base = area_um2(s, diffusion_overhead=1.0, routing_factor=1.0)
     scaled = area_um2(s, diffusion_overhead=2.0, routing_factor=3.0)
+    assert capacitor_area_um2(s) == 0.0
     assert scaled == pytest.approx(6 * base)
 
 
@@ -235,7 +309,7 @@ def test_deck_has_required_sections(cell):
 def test_deck_measures_all_four_quantities():
     s = spec()
     deck = build_deck(s, worst_case_stimulus(s))
-    for m in ("tpd", "trf", "iavg", "ipeak"):
+    for m in ("tpd", "trf", "iavg", "imax", "imin"):
         assert f" {m} " in deck
 
 
@@ -412,9 +486,17 @@ def test_table_i_drops_unpaired_rows():
 
 
 def test_table_i_savings_are_fractions():
+    """
+    A saving of 1 - crtl/lctl is bounded above by 1 -- you cannot save more
+    than everything -- but it is *not* bounded below. Once capacitor area is
+    counted, CRTL is many times larger than a conductance cell at this fan-in,
+    so the area "saving" is a large negative number. That is a real result
+    about the two families, not a range violation, so only the upper bound is
+    asserted.
+    """
     rows = table_i_rows(key_size_sweep(key_sizes=[2], runner=fake_runner))
     for key in ("area_saving", "power_saving", "delay_saving"):
-        assert -1.0 <= rows[0][key] <= 1.0
+        assert rows[0][key] <= 1.0
 
 
 def test_write_csv_roundtrip(tmp_path):

@@ -167,10 +167,32 @@ def characterize(
     for rise in (True, False):
         stim = worst_case_stimulus(spec, rise=rise)
         meas = run(build_deck(spec, stim))
+
+        # A measurement ngspice never emits is not the same as one it reports
+        # as failed, and only the latter reaches parse_measurements. Without
+        # this check a deck whose output never switches returns tpd=0.0 and
+        # the cell looks infinitely fast -- the exact "suspiciously flat
+        # curve" this module was written to rule out.
+        missing = [k for k in ("tpd", "trf") if k not in meas]
+        if missing:
+            raise MeasurementError(
+                f"{spec.cell} fanin={spec.fanin} T={spec.threshold} "
+                f"(rise={rise}): ngspice produced no value for {missing}. The "
+                "output almost certainly never crossed the trigger level, so "
+                "the gate did not switch for this pattern."
+            )
         delay = max(delay, abs(meas.get("tpd", 0.0)))
         transition = max(transition, abs(meas.get("trf", 0.0)))
         iavg = max(iavg, abs(meas.get("iavg", 0.0)))
-        ipeak = max(ipeak, abs(meas.get("ipeak", 0.0)))
+        # ngspice cannot take ABS() inside .meas MAX, so the deck reports the
+        # supply current's two extremes separately and the peak magnitude is
+        # recombined here.
+        peak = max(
+            abs(meas.get("imax", 0.0)),
+            abs(meas.get("imin", 0.0)),
+            abs(meas.get("ipeak", 0.0)),
+        )
+        ipeak = max(ipeak, peak)
 
     return CellResult(
         cell=spec.cell,
